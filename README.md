@@ -86,16 +86,17 @@ bigger than ~6bp a trade, against a cost of roughly 10bp just to break even.
 **Arb (SAFEX minus CBOT).** Better, and the most interesting result here. On the
 roll-safe series, `vol_regime` clears Bonferroni at IC -0.27 (t -4.31) against a
 15-day forward move, and `yw_z` survives at t 3.01. Out of sample the model gets
-mean IC 0.10 across three folds, +10% a year, -27% max drawdown, Sharpe 0.60.
+mean IC 0.13 across three folds, +14% a year, -26% max drawdown, Sharpe 0.75.
 
-That is still not significance. The t-stat is 1.23 on 105 non-overlapping trades,
+That is still not significance. The t-stat is 1.54 on 70 non-overlapping trades,
 and the three folds only cover 2022 onward, which we already know is the
 favourable half of the sample.
 
-**A caveat worth repeating.** With a 10-day hold there are ten equally valid ways
-to pick a non-overlapping sample, and on this data they give Sharpes between 0.33
-and 1.24. `performance_stats` averages over all of them and reports the min and
-max, so a single figure cannot be quoted without its spread.
+**A caveat worth repeating.** With a 15-day hold there are fifteen equally valid
+ways to pick a non-overlapping sample, and on this data they give Sharpes between
+-0.32 and 1.50. `performance_stats` averages over all of them and reports the min
+and max, so a single figure cannot be quoted without its spread. That range
+straddling zero is the fairest one-line summary of the result.
 
 ## Running it
 

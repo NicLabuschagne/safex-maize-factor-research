@@ -176,6 +176,7 @@ def run_walk_forward(X: pd.DataFrame, y: pd.Series, n_splits: int = 6, embargo: 
             "n_test": len(test_index),
             "oos_ic": score_predictions(prediction, y.iloc[test_index]),
             "params": params,
+            "feat_rank": model.feature_names_in_, "importance": model.feature_importances_
         })
 
     folds = pd.DataFrame(fold_rows)

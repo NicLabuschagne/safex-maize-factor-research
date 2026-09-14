@@ -22,3 +22,6 @@ data/
 
 # Data files anywhere (panels are rebuilt by build.py)
 *.parquet
+
+# Generated reports
+notebooks/factor_analysis_report.*
