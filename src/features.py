@@ -196,3 +196,106 @@ def forward_horizons(df: pd.DataFrame, col: str, horizons: list[int],
         df[f"target_{horizon}_d"] = forward_return / expected_vol
 
     return df
+
+# Hedged beta spread
+
+def rolling_hedge_ratio_naive(df, base_col, quote_col, window=120, rebalance_days=5):
+    """Estimate beta by rolling OLS, then freeze it between rebalances.
+
+    A beta of 1 assumes SAFEX and CBOT move one-for-one. They don't -- freight,
+    local basis and FX pass-through mean the true ratio drifts. Freezing between
+    rebalances stops the hedge jittering on daily noise.
+    """
+    base = df[base_col]
+    quote = df[quote_col]
+
+    # Rolling OLS slope: cov(base, quote) / var(base).
+    covariance = quote.rolling(window).cov(base)
+    variance = base.rolling(window).var()
+    beta_raw = covariance / variance
+
+    # Freeze: only let beta update every `rebalance_days` bars.
+    beta_frozen = beta_raw.copy()
+    beta_frozen[:] = np.nan
+    beta_frozen.iloc[::rebalance_days] = beta_raw.iloc[::rebalance_days]
+    return beta_frozen.ffill()
+
+def hedged_spread(df, base_col, quote_col, window=120, rebalance_days=5):
+    """Continuous hedged spread built from returns, not level differences.
+
+    Differencing the level across a beta change measures the revaluation from
+    re-hedging, not a market move -- the same trap as differencing across a
+    roll. So take the hedged return each bar using the beta already in force,
+    then sum back up into a continuous series.
+    """
+    base_ret = df[base_col].diff()
+    quote_ret = df[quote_col].diff()
+
+    # Estimate on returns: regressing log levels on log levels is spurious.
+    covariance = quote_ret.rolling(window).cov(base_ret)
+    variance = base_ret.rolling(window).var()
+    beta_raw = covariance / variance
+
+    # Freeze between rebalances.
+    beta_frozen = pd.Series(np.nan, index=df.index)
+    beta_frozen.iloc[::rebalance_days] = beta_raw.iloc[::rebalance_days]
+    beta_frozen = beta_frozen.ffill()
+
+    # Apply the beta that was already in force at the start of the bar, so the
+    # hedge ratio is never set with knowledge of the bar it prices.
+    hedged_return = quote_ret - beta_frozen.shift(1) * base_ret
+
+    return beta_frozen, hedged_return.cumsum()
+
+def ou_half_life(series, window=60):
+    """Half-life of mean reversion, from an AR(1) fit on the rolling window.
+
+    Regress the change on the lagged level: delta_t = a + b * level_{t-1}.
+    A negative b means reversion; half-life = -ln(2)/ln(1+b). Short half-life
+    means reversion trades make sense, long or undefined means they don't.
+    """
+    def fit(x):
+        level = x[:-1]
+        delta = np.diff(x)
+        if np.var(level) == 0:
+            return np.nan
+        b = np.cov(level, delta)[0, 1] / np.var(level)
+        if b >= 0 or (1 + b) <= 0:
+            return np.nan          # not reverting over this window
+        return -np.log(2) / np.log(1 + b)
+
+    return series.rolling(window).apply(fit, raw=True)
+
+
+def variance_ratio(series, window=60, lag=5):
+    """Variance of k-period returns divided by k times variance of 1-period.
+
+    Above 1 means trending (moves compound), below 1 means mean-reverting
+    (moves offset), around 1 means random walk.
+    """
+    returns_1 = series.diff()
+    returns_k = series.diff(lag)
+    var_1 = returns_1.rolling(window).var()
+    var_k = returns_k.rolling(window).var()
+    return var_k / (lag * var_1)
+
+
+def cross_leg_correlation(df, col_a, col_b, window=60):
+    """Rolling correlation between the two legs' returns.
+
+    A direct measure of whether the arb relationship is holding. Falling
+    correlation is the decoupling regime where fading the spread is dangerous.
+    """
+    return df[col_a].diff().rolling(window).corr(df[col_b].diff())
+
+
+def relative_volatility(df, col_a, col_b, window=60):
+    """Which leg is driving. Ratio of the two legs' realised vol."""
+    vol_a = df[col_a].diff().rolling(window).std()
+    vol_b = df[col_b].diff().rolling(window).std()
+    return vol_a / vol_b
+
+
+
+
+
