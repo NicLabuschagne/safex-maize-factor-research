@@ -1,102 +1,69 @@
-# SAFEX maize factor research
+# SAFEX commodity research
 
-Factor research on JSE/SAFEX white and yellow maize, with CBOT corn and USDZAR as
-the cross-market legs. The question is whether a set of CTA-style features has any
-predictive power over forward returns, either on the outright price or on the
-SAFEX/CBOT arb.
+Quantitative research on JSE/SAFEX grain — white and yellow maize primarily — with
+CBOT corn and USDZAR as the cross-market legs. The recurring object of interest is
+the SAFEX/CBOT import-parity arb and the outright maize price that forms one leg
+of it.
 
-The point of the repo is the process as much as the answer: build features, screen
-them honestly, throw away what does not survive, and only then fit a model.
+Several separate studies live here. They share the data pipeline in `src/` and the
+roll-safe return convention, but each answers its own question and reaches its own
+verdict. Most of those verdicts are negative, which is the point: the repo is a
+record of what was tested and discarded as much as what survived.
+
+## The studies
+
+**Factor analysis** — a CTA-style feature screen against forward returns on both
+the outright and the arb. Rank IC with Newey-White t-stats, decay profiling,
+correlation pruning, Bonferroni selection, then walk-forward XGB. Nothing survives
+on the outright; the arb is better but still short of significance.
+`notebooks/factor_analysis.ipynb`, written up in
+`notebooks/factor_analysis_findings.md`.
+
+**CTA and time-series momentum** — whether outright momentum state can be used as
+a gate to time the arb, and whether a standalone systematic outright system exists
+on yellow or white maize. It cannot and it does not; one scarcity-proxy lead
+survives as something worth pre-registering rather than trading.
+`notebooks/ts_momentum.ipynb`, written up in `notebooks/ym_cta_findings.md`.
+
+**Regime detection** — whether YM trades in a small number of distinct, reliably
+identifiable market states that could each host different positioning. It does
+not: corrected for how little independent information slow-moving descriptors
+carry, the data supports one state rather than three. What does survive is a
+seasonal cycle in the arb, which turns out to be the usable finding for
+positioning. `notebooks/seasonality.ipynb`.
+
+**Arb and spread exploration** — the structure of the SAFEX/CBOT arb across the
+contract panel and the liquid rolled series (`notebooks/ym_corn_arb.ipynb`), and
+a cointegration and half-life study of the DCE crush spread
+(`notebooks/crush_spread_vecm.ipynb`).
 
 ## Layout
 
     src/features.py    feature generation
+    src/regimes.py     regime clustering, reliability diagnostics, arb response
     src/model.py       XGB + walk-forward validation + performance stats
     src/utilities.py   IC screening, decay, correlation, plots
     src/ingest.py      raw SAFEX/CBOT/FX loaders
     src/roll.py        roll spine and liquid series
     build.py           builds the parquet panels in data/processed
+    export_report.py   code-free HTML export of any notebook, for sharing
 
-    notebooks/factor_analysis.ipynb    the pipeline, end to end
+## The convention everything depends on
 
-## The data problem that shapes everything
+The panel is a stitched front-contract series. Differencing raw price across a
+roll measures the gap between two delivery months, not a market move, and it is
+not a small effect — naive daily log returns hit 26% against 6% once returns are
+taken within expiry.
 
-The panel is a stitched front-contract series: one row per date, 45 contracts,
-median contract about 98 rows. Differencing the raw price across a roll measures
-the gap between two delivery months, not a market move.
+So returns are always computed within a contract and summed back into a continuous
+series: `clog_` for prices, `c_` for spreads. Every feature is built on those,
+never on the raw column. The same trap recurs in different clothing throughout the
+repo — roll dates arrive as NaNs that silently void long rolling windows, and they
+have to be handled explicitly rather than dropped.
 
-It is not a small effect. On the outright, naive daily log returns hit a maximum
-of 26% against 6% once returns are taken within expiry. On the arb, roll days move
-the spread a median of 6 USD/t against a typical daily move under 3, with a worst
-case of 66.
-
-So `build_log_returns()` takes changes within each contract and sums them back
-into a continuous series - `clog_` for prices, `c_` for spreads. Every feature is
-built on those, never on the raw column.
-
-Two consequences worth knowing:
-
-- A 200-day window cannot be computed inside a 98-row contract. The continuous
-  series is what makes long windows possible at all.
-- Rolls follow the calendar, so calendar features will happily predict them.
-  Before the fix, `season_cos` and `days_to_harvest` were the strongest features
-  in the screen. Both vanished once rolls could no longer leak.
-
-## Features
-
-Moving-average distance (z-scored), MA crossover, MACD, share of days above the
-MA, realised vol and vol regime, volume ratio and trend, seasonality, days to
-harvest, and the yellow/white spread z-score.
-
-Spreads get differences rather than logs, because they cross zero - the arb is
-negative about 17% of the time.
-
-## Process
-
-1. **IC screen.** Rank IC of every feature against every horizon, with
-   Newey-West t-stats at lag = horizon. Overlapping forward returns are not
-   independent, and the correction matters: at a 10-day horizon a naive p-value
-   of 0.0016 becomes 0.21.
-2. **Decay.** IC by horizon. A real signal decays smoothly from a peak; a jagged
-   line around zero is noise.
-3. **Correlation.** Adjacent MA windows correlate around 0.9, so five features
-   are really about two. Anything above 0.8 gets pruned, strongest t first.
-4. **Selection.** Bonferroni over the whole screen grid. More features means a
-   higher bar for all of them, which is the honest cost of searching.
-5. **Model.** XGB, shallow trees, walk-forward. Two loops: the outer one walks
-   through time, the inner one picks hyperparameters inside the training data
-   only.
-
-Screening runs on the train slice only, and the model drops any fold that would
-test inside that window. Otherwise the folds score the selection rather than the
-signal.
-
-The embargo is set to the forecast horizon. A 10-day target at row *i* reads
-prices through row *i+10*, so training up to the test block puts ten days of the
-future into the fit. `embargo = horizon` is the exact minimum.
-
-## What came out
-
-**Outright (USD maize).** Nothing survives. MA distance peaks around 5-21 days at
-IC ~0.10 in sample and is dead past a month. Out of sample the mean IC is -0.02
-with 3 of 6 folds positive, win rate 48%, and a t-stat of -0.83. Shortening to a
-1-day horizon gives five times the independent sample and rules out anything
-bigger than ~6bp a trade, against a cost of roughly 10bp just to break even.
-
-**Arb (SAFEX minus CBOT).** Better, and the most interesting result here. On the
-roll-safe series, `vol_regime` clears Bonferroni at IC -0.27 (t -4.31) against a
-15-day forward move, and `yw_z` survives at t 3.01. Out of sample the model gets
-mean IC 0.13 across three folds, +14% a year, -26% max drawdown, Sharpe 0.75.
-
-That is still not significance. The t-stat is 1.54 on 70 non-overlapping trades,
-and the three folds only cover 2022 onward, which we already know is the
-favourable half of the sample.
-
-**A caveat worth repeating.** With a 15-day hold there are fifteen equally valid
-ways to pick a non-overlapping sample, and on this data they give Sharpes between
--0.32 and 1.50. `performance_stats` averages over all of them and reports the min
-and max, so a single figure cannot be quoted without its spread. That range
-straddling zero is the fairest one-line summary of the result.
+Rolls also follow the calendar, so calendar features will happily predict them.
+Before the fix, `season_cos` and `days_to_harvest` were the strongest features in
+the factor screen. Both vanished once rolls could no longer leak.
 
 ## Running it
 
@@ -105,5 +72,14 @@ straddling zero is the fairest one-line summary of the result.
     pip install -r requirements.txt
     python build.py
 
-Then run `notebooks/factor_analysis.ipynb` top to bottom. The notebook uses
-`%autoreload`, so edits to `src/` take effect without restarting the kernel.
+Then run any notebook top to bottom. They read the parquets in `data/processed/`
+and never call the loaders directly. All use `%autoreload`, so edits to `src/`
+take effect without restarting the kernel.
+
+To share a notebook with someone who does not want to read code:
+
+    python export_report.py notebooks/seasonality.ipynb
+
+That writes markdown, tables and charts only, with images embedded, in both a dark
+and a light theme. There is no LaTeX or headless browser installed here, so print
+to PDF from the browser if a PDF is needed.

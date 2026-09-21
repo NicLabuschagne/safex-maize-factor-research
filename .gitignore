@@ -25,3 +25,6 @@ data/
 
 # Generated reports
 notebooks/factor_analysis_report.*
+
+# Generated report exports
+*.html
